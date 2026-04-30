@@ -1,12 +1,16 @@
-from functools import partial  # For fixing arguments to worker functions
+"""Module that contains the graph state object and BSQN functions."""
+
+from functools import cache, partial
 
 import igraph as ig
 import multiprocess as mp
 import numpy as np
 import stim
-from sympy import fwht
 
-from graph_state.array_helper import probabilistic_select_rows, constructive_disjoint_complete_graph_stabilizer_grouping
+from graph_state.array_helper import (
+    probabilistic_select_rows,
+    constructive_disjoint_complete_graph_stabilizer_grouping,
+)
 
 
 def _validate_fidelity(fidelity: float):
@@ -87,7 +91,7 @@ class GraphState:
         for u in range(self.n):
             self.int_stab_generators[u][u] = 2
 
-    def generate_all_int_staiblizers(self):
+    def generate_all_int_stabilizers(self):
         """
         Generates all non-identity stabilizer elements from the base generators.
 
@@ -120,21 +124,6 @@ class GraphState:
             # Concatenate these boolean arrays to form the specified extended format:
             # [X_q0, X_q1,..., X_qn-1, Z_q0,..., Z_qn-1, Y_q0,..., Y_qn-1]
             yield np.concatenate((is_X, is_Z, is_Y))
-
-    def get_stabilizers_extended_format(self):
-        """
-        The return format is a Boolean numpy array of shape (3n)
-        where the first n elements denoting the marked Pauli X, and then Z, and then Y.
-        """
-        for i in range(1, 2**self.n):
-            si = np.array([c == "1" for c in f"{i:0{self.n}b}"[::-1]])
-            yield np.array(
-                [
-                    (np.bitwise_xor.reduce(self.int_stab_generators[si][:])) == 2,
-                    (np.bitwise_xor.reduce(self.int_stab_generators[si][:])) == 1,
-                    (np.bitwise_xor.reduce(self.int_stab_generators[si][:])) == 3,
-                ]
-            ).reshape(self.n * 3)
 
     def sample_int_stabilizers(self, shots: int, seed: int = None):
         """
@@ -195,14 +184,13 @@ class GraphState:
 
     def get_bell_sampling_circuit(self) -> stim.Circuit:
         sampling_circuit = stim.Circuit(
-            f"""
-        CX {' '.join([f'{i} {self.n + i}' for i in range(self.n)])}
-        H {' '.join(map(str, range(self.n)))}
-        CX {' '.join([f'{i} {2 * self.n + i}' for i in range(self.n)])}
-        CX {' '.join([f'{self.n + i} {2 * self.n + i}' for i in range(self.n)])}
-        X {' '.join(map(str,range(2 * self.n, 3 * self.n)))}
-        MZ {' '.join(map(str, range(3 * self.n)))}
-        """
+            f"CX {' '.join([f'{i} {self.n + i}' for i in range(self.n)])}\n"
+            f"H {' '.join(map(str, range(self.n)))}\n"
+            # these CX's and X are for measuring YY
+            f"CX {' '.join([f'{i} {2 * self.n + i}' for i in range(self.n)])}\n"
+            f"CX {' '.join([f'{self.n + i} {2 * self.n + i}' for i in range(self.n)])}\n"
+            f"X {' '.join(map(str,range(2 * self.n, 3 * self.n)))}\n"
+            f"MZ {' '.join(map(str, range(3 * self.n)))}"
         )
         return sampling_circuit
 
@@ -216,6 +204,7 @@ class GraphState:
         return stim.Circuit(f'MPP {' '.join(stim_pauli_prods)}')
 
 
+@cache
 def get_true_diagonals(num_qubits: int, fidelity: float, error_model: str):
     """Returns the true diagonal vector in the graph-state basis.
     
@@ -251,17 +240,6 @@ def get_true_diagonals(num_qubits: int, fidelity: float, error_model: str):
     raise ValueError(f"unknown error_model (given {error_model})")
 
 
-def expectation_value_of_observables_bitpacked(int_paulis: np.ndarray, measurement_results: np.ndarray):
-    # tables for eigenvalues
-    #      | Phi+ | Phi- | Psi+ | Psi- |
-    #  XX  |   1  |  -1  |   1  |  -1  |  check Z
-    #  YY  |  -1  |   1  |   1  |  -1  |  xor 00
-    #  ZZ  |   1  |   1  |  -1  |  -1  |  check X
-    gn = lambda x: np.bitwise_count(np.bitwise_xor.reduce(x & int_paulis, axis=1)) % 2
-    n = len(measurement_results)
-    return max((n - 2.0 * np.sum(gn(measurement_results))) / n, 0)
-
-
 def bell_sampling(g: GraphState, error_model: str, fidelity: float, shots: int, seed: int = None):
     """steps to perform Bell samping.
         1. create the circuit of graph state.
@@ -277,7 +255,7 @@ def bell_sampling(g: GraphState, error_model: str, fidelity: float, shots: int, 
         circuit += g.get_noise_circuit(fidelity, error_model, 0) + g.get_noise_circuit(fidelity, error_model, g.n)
         circuit += g.get_bell_sampling_circuit()
         # return circuit
-        return circuit.compile_sampler(seed=seed).sample_bit_packed(shots)
+        return circuit.compile_sampler(seed=seed).sample(shots, bit_packed=True)
     
     """error model must be depolarizing, we need to build 4 circuits:
     1. no error/no error
@@ -294,16 +272,17 @@ def bell_sampling(g: GraphState, error_model: str, fidelity: float, shots: int, 
     circ_3 = base_circ + g.get_noise_circuit(fidelity, 'fully-dephased', g.n) + bell_circ
     circ_4 = base_circ + g.get_noise_circuit(fidelity, 'fully-dephased', 0) + g.get_noise_circuit(fidelity, 'fully-dephased', g.n) + bell_circ
 
-    samples_1 = circ_1.compile_sampler(seed=seed).sample_bit_packed(shots)
-    samples_2 = circ_2.compile_sampler(seed=seed).sample_bit_packed(shots)
-    samples_3 = circ_3.compile_sampler(seed=seed).sample_bit_packed(shots)
-    samples_4 = circ_4.compile_sampler(seed=seed).sample_bit_packed(shots)
+    samples_1 = circ_1.compile_sampler(seed=seed).sample(shots, bit_packed=True)
+    samples_2 = circ_2.compile_sampler(seed=seed).sample(shots, bit_packed=True)
+    samples_3 = circ_3.compile_sampler(seed=seed).sample(shots, bit_packed=True)
+    samples_4 = circ_4.compile_sampler(seed=seed).sample(shots, bit_packed=True)
 
     N = 2 ** g.n
     p = fidelity - (1 - fidelity) / (N - 1)
 
     samples = probabilistic_select_rows([samples_1, samples_2, samples_3, samples_4], [p**2, p * (1 - p), p * (1 - p), (1 - p)**2], seed=seed)
-    return samples    
+    return samples
+
 
 def expectation_value_of_observables_from_bell_bitpacked(
     int_paulis: np.ndarray,
@@ -330,47 +309,36 @@ def expectation_value_of_observables_from_bell_bitpacked(
        (this tells the sign contribution from each bit)
     2. We see if the total is an odd or even parity (total sign of + or -)
     3. We then sum all of them and divided by the total number of measurements
+
+    A longer explanation of this magical piece of code:
+        - `measurement_results` is a list of outcomes for each shot in the simulation;
+        - `x & int_paulis` computes what outcomes will contribute to a -1 in the total
+            outcome of the Pauli product;
+        - `np.bitwise_xor.reduce()` is the first step in the reduction process. It xors
+            each element in a measurement result array. Then, `np.bitwise_count() % 2`
+            finishes things off by xor'ing the rest of the values and concluding if the
+            final result is positive or negative;
+        - All negative results will reduce the value of the expectation value. With
+            this in mind, the return line makes sense: start with the biggest possible
+            value and decrease it based on all contributions from negative outcomes.
     """
+    # tables for eigenvalues
+    #      | Phi+ | Phi- | Psi+ | Psi- |
+    #  XX  |   1  |  -1  |   1  |  -1  |  check Z
+    #  YY  |  -1  |   1  |   1  |  -1  |  xor 00
+    #  ZZ  |   1  |   1  |  -1  |  -1  |  check X
     gn = lambda x: np.bitwise_count(np.bitwise_xor.reduce(x & int_paulis, axis=1)) % 2
     n = len(measurement_results)
     return (n - 2.0 * np.sum(gn(measurement_results))) / n
 
-def _worker_calculate_exp_value_packed(packed_s_item, meas_samples_fixed):
-    """
-    Worker function for multiprocessing. Calls the original expectation value function.
-    'packed_s_item' is one row from the Packed_S_matrix.
-    'meas_samples_fixed' is the constant meas_samples array.
-    """
-    return expectation_value_of_observables_from_bell_bitpacked(packed_s_item, meas_samples_fixed)
-
-def expectation_value_of_observables_from_bell_bitpacked_parallelized(g: GraphState, bell_samples):
-    stabilizers_unpacked_list = list(g.generate_all_int_staiblizers())
-    S_matrix = np.array(stabilizers_unpacked_list)
-    Packed_S_matrix = np.packbits(S_matrix, axis=1, bitorder='little')
-    task_function = partial(_worker_calculate_exp_value_packed, meas_samples_fixed=bell_samples)
-    num_processes = max(1, mp.cpu_count() - 2) # Leave some cores for other tasks
-    packed_s_tasks = [row for row in Packed_S_matrix]
-    with mp.Pool(processes=num_processes) as pool:
-        exps_list_results = pool.map(task_function, packed_s_tasks)
-        exps = np.array(exps_list_results)
-    return exps
 
 def fidelity_estimation_via_random_sampling_bitpacked(g: GraphState, num_stabilizers: int, bell_samples):
     # bitpacked in little endian, the same way as stim does
-    fn = lambda x: np.sqrt(np.maximum(expectation_value_of_observables_bitpacked(x, bell_samples), 0))
+    fn = lambda x: np.sqrt(np.maximum(expectation_value_of_observables_from_bell_bitpacked(x, bell_samples), 0))
     stabilizers = np.packbits(g.sample_int_stabilizers(num_stabilizers), axis=1, bitorder='little')
     sum_sqrt_cp = np.sum([fn(p) for p in stabilizers])
     return sum_sqrt_cp / len(stabilizers)
 
-def fidelity_estimation_via_random_sampling_parallelized(g: GraphState, num_obs: int, bell_samples):
-    ps = np.packbits(g.sample_int_stabilizers(num_obs), axis=1, bitorder='little')
-    task_function = partial(_worker_calculate_exp_value_packed, meas_samples_fixed=bell_samples)
-    num_processes = max(1, mp.cpu_count() - 2) # Leave some cores for other tasks
-    packed_s_tasks = [row for row in ps]
-    with mp.Pool(processes=num_processes) as pool:
-        exps_list_results = pool.map(task_function, packed_s_tasks)
-        exps = np.array(exps_list_results)
-    return np.mean(np.sqrt(np.maximum(0, exps)))
 
 def _post_process_dge_for_complete_graph_overlap(g: GraphState, samples, seed: int = None):
     """postprocess dge for complete graph state with non-overlapping stabilizer observables"""
@@ -627,7 +595,7 @@ def dge_combined(
         circuit = g.get_graph_state_circuit(0)
         circuit += g.get_noise_circuit(fidelity, error_model, 0)
         circuit += g.get_partial_tomo_measurement_circuit()
-        samples = circuit.compile_sampler(seed=seed).sample_bit_packed(shots)
+        samples = circuit.compile_sampler(seed=seed).sample(shots, bit_packed=True)
     else:
         base_circ = g.get_graph_state_circuit(0)
         meas_circ = g.get_partial_tomo_measurement_circuit()
@@ -637,8 +605,8 @@ def dge_combined(
             base_circ + g.get_noise_circuit(fidelity, "fully-dephased", 0) + meas_circ
         )
 
-        samples_1 = circ_1.compile_sampler(seed=seed).sample_bit_packed(shots)
-        samples_2 = circ_2.compile_sampler(seed=seed).sample_bit_packed(shots)
+        samples_1 = circ_1.compile_sampler(seed=seed).sample(shots, bit_packed=True)
+        samples_2 = circ_2.compile_sampler(seed=seed).sample(shots, bit_packed=True)
 
         N = 2**g.n
         p = fidelity - (1 - fidelity) / (N - 1)
@@ -652,6 +620,37 @@ def dge_combined(
         return _post_process_dge_for_complete_graph_overlap(g, samples)
     else:
         return _post_process_dge_for_complete_graph_non_overlap(g, samples)
+
+
+def fwht(x: np.array, inverse: bool = False):
+    """
+    Fast Walsh–Hadamard transform.
+    
+    Taken from SPyRiT's source code, which in turn is adapted from Amit
+    Portnoy's hadamard-transform library.
+    """
+    original_shape = x.shape
+
+    # create batch if x is 1D
+    if len(original_shape) == 1:
+        x = x.reshape(1, -1)  # shape (1, n)
+
+    *batch, d = x.shape  # batch is tuple and d is int
+    h = 2
+
+    while h <= d:
+        x = x.reshape(*batch, d // h, h)
+        half1, half2 = np.split(x, 2, axis=-1)
+        x = np.concatenate((half1 + half2, half1 - half2), axis=-1)
+        h *= 2
+
+    x = x.reshape(original_shape)
+
+    if inverse:
+        x = x / x.size
+
+    return x
+
 
 def get_diagonals_from_all_stabilizer_observables(g: GraphState, expvals):
     N_fwhm = 1 << g.n  # 2**n_qubits, size of the FWHT vector
@@ -670,7 +669,7 @@ def get_diagonals_from_all_stabilizer_observables(g: GraphState, expvals):
     # Calculate the Fast Walsh-Hadamard Transform
     # The result 'transformed_coeffs[i]' = sum_s (fwht_input[s] * (-1)**<i,s>)
     # where <i,s> is the bitwise dot product (popcount(i&s) % 2)
-    transformed_coeffs = np.array(fwht(fwht_input), dtype=float)
+    transformed_coeffs = fwht(fwht_input)
 
     # Calculate the final diagonal values
     diagonals = transformed_coeffs / N_fwhm

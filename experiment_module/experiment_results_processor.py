@@ -156,16 +156,21 @@ def load_bsqn_fidelity_estimation_data(output_dir: str):
         print(f"Warning: Fidelity data directory '{output_dir}' not found. Returning empty DataFrame.")
         return pd.DataFrame()
 
-    for filename in os.listdir(output_dir):
-        match = file_pattern.match(filename)
+    files = (
+        os.path.join(r, f)
+        for r, _, filelist in os.walk(output_dir)
+        for f in filelist
+    )
+
+    for filepath in files:
+        match = file_pattern.match(os.path.basename(filepath))
         if match:
             qubits, F_str, err, shots, numstab = match.groups()
             qubits = int(qubits)
             input_F = float(F_str)
             shots = int(shots)
             numstab = int(numstab)
-            
-            filepath = os.path.join(output_dir, filename)
+
             fidelities_array = np.load(filepath)
             
             for i, est_fidelity in enumerate(fidelities_array):

@@ -55,11 +55,16 @@ def _run_bell_sampling_worker(combination: tuple, num_repeats: int, output_dir: 
     # Run the actual experiment
     try:
         # all_fidelities = [fidelity_estimation_via_random_sampling_bitpacked(g, numstab, samples)]
-        all_fidelities = []
-        for seed_i in range(num_repeats):
-            samples = gs.bell_sampling(g, err, fid, shots, seed=seed_i)
-            est_fidelity = gs.fidelity_estimation_via_random_sampling_bitpacked(g, numstab, samples)
-            all_fidelities.append(est_fidelity)
+        samples = gs.bell_sampling(g, err, fid, shots * num_repeats, seed=shots * num_repeats)
+        all_fidelities = [
+            gs.fidelity_estimation_via_random_sampling_bitpacked(g, numstab, sample_split)
+            for sample_split in np.split(samples, num_repeats)
+        ]
+
+        # for seed_i in range(num_repeats):
+        #    samples = gs.bell_sampling(g, err, fid, shots, seed=seed_i)
+        #    est_fidelity = gs.fidelity_estimation_via_random_sampling_bitpacked(g, numstab, samples)
+        #    all_fidelities.append(est_fidelity)
             
         # Save the result
         np.save(filepath, np.array(all_fidelities))
@@ -242,7 +247,7 @@ def _run_bell_sampling_diagonal_worker(combination: tuple, g: gs.GraphState, num
                 gs.expectation_value_of_observables_from_bell_bitpacked(
                     np.packbits(stab, bitorder="little"), samples
                 )
-                for stab in g.generate_all_int_staiblizers()
+                for stab in g.generate_all_int_stabilizers()
             ]
         )
         sqrt_exps_safe = np.sqrt(np.maximum(0, exps))
@@ -315,7 +320,7 @@ def _run_bell_sampling_diagonal_single_run_worker(combination: tuple[gs.GraphSta
             gs.expectation_value_of_observables_from_bell_bitpacked(
                 np.packbits(stab, bitorder="little"), bell_samples
             )
-            for stab in g.generate_all_int_staiblizers()
+            for stab in g.generate_all_int_stabilizers()
         ]
     )
     sqrt_exps_safe = np.sqrt(np.maximum(0, exps))
