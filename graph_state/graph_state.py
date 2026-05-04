@@ -1,6 +1,6 @@
 """Module that contains the graph state object and BSQN functions."""
 
-from functools import cache, partial
+from functools import lru_cache, partial
 
 import igraph as ig
 import multiprocess as mp
@@ -75,6 +75,9 @@ class GraphState:
         self.adj_mat = self.graph.get_adjacency()
         self._populate_generators()
         self._powers_of_2_for_selection = 2 ** np.arange(self.n)
+
+    def __hash__(self) -> int:
+        return hash(str(self.graph))
 
     def _populate_generators(self):
         """enumerate all stabilizer generators as 
@@ -204,7 +207,7 @@ class GraphState:
         return stim.Circuit(f'MPP {' '.join(stim_pauli_prods)}')
 
 
-@cache
+@lru_cache(maxsize=128)
 def get_true_diagonals(num_qubits: int, fidelity: float, error_model: str):
     """Returns the true diagonal vector in the graph-state basis.
     
