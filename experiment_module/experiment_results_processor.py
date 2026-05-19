@@ -185,3 +185,29 @@ def load_bsqn_fidelity_estimation_data(output_dir: str):
                     "fidelity_error": np.abs(est_fidelity - input_F) # (est - true)
                 })
     return pd.DataFrame(all_data)
+
+
+def load_bsqn_incremental_sampling_data(output_dir: str) -> pd.DataFrame:
+    data = []
+    file_pattern = re.compile(
+        r"bell_incremental_(\d+)q_F([\d.]+)_err_(.*?)_epsilon([\d.]+)_repeat(\d+).npy"
+    )
+
+    for filename in os.listdir(output_dir):
+        if file_pattern.match(filename):
+            filepath = os.path.join(output_dir, filename)
+            data.append(np.load(filepath))
+
+    columns_and_types = {
+        "qubits": "int64",
+        "error_type": "object",
+        "fidelity": "float64",
+        "epsilon": "float64",
+        "norm_order": "int8",
+        "delta_a_norm": "float64",
+        "repeat": "int64",
+        "total_samples": "int64",
+    }
+
+    df = pd.DataFrame(data, columns=list(columns_and_types.keys()))
+    return df.astype(dtype=columns_and_types)
