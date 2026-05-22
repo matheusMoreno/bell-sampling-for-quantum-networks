@@ -60,6 +60,7 @@ def _run_bell_sampling_worker(combination: tuple, num_repeats: int, output_dir: 
             gs.fidelity_estimation_via_random_sampling_bitpacked(g, numstab, sample_split)
             for sample_split in np.split(samples, num_repeats)
         ]
+        assert len(all_fidelities) == num_repeats
 
         # for seed_i in range(num_repeats):
         #    samples = gs.bell_sampling(g, err, fid, shots, seed=seed_i)
@@ -115,7 +116,7 @@ def bell_sampling_fidelity_experiment(
     )
     
     # Set up and run the multiprocessing pool
-    num_processes = max(1, mp.cpu_count() - 2) # Leave some cores free
+    num_processes = max(1, os.cpu_count() - 2) # Leave some cores free
     print(f"Running on {num_processes} processes...")
 
     results = []
@@ -214,7 +215,7 @@ def partial_tomo_experiment_parallelized(
     )
     
     # Set up and run the multiprocessing pool
-    num_processes = max(1, mp.cpu_count() - 2) # Leave some cores free
+    num_processes = max(1, os.cpu_count() - 2) # Leave some cores free
     print(f"Running on {num_processes} processes...")
 
     results = []
@@ -291,7 +292,7 @@ def bell_sampling_diagonal_experiment(
     )
     
     # Set up and run the multiprocessing pool
-    num_processes = max(1, mp.cpu_count() - 2) # Leave some cores free
+    num_processes = max(1, os.cpu_count() - 2) # Leave some cores free
     print(f"Running on {num_processes} processes...")
 
     results = []
@@ -365,7 +366,7 @@ def bell_diagonal_scalability_experiment(
     )
     
     # Set up and run the multiprocessing pool
-    num_processes = max(1, mp.cpu_count() - 2) # Leave some cores free
+    num_processes = max(1, os.cpu_count() - 2) # Leave some cores free
     print(f"Running on {num_processes} processes...")
 
     results = []
